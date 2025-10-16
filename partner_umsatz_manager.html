@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Partner-Umsatzverwaltung</title>
+  <style>
+    :root{font-family:Inter, Roboto, Arial, sans-serif; --bg:#f6f8fb; --card:#fff; --accent:#0b62ff; --muted:#6b7280;}
+    body{margin:0;background:var(--bg);color:#0f1724;padding:24px;}
+    .container{max-width:1100px;margin:0 auto;}
+    h1{margin:0 0 12px;font-size:20px;}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;}
+    .card{background:var(--card);padding:16px;border-radius:10px;box-shadow:0 6px 18px rgba(13,17,30,0.06);margin-bottom:12px;}
+    input,select,button{font-size:14px;padding:8px;border-radius:8px;border:1px solid #e6e9ef;}
+    button{background:var(--accent);color:#fff;border:0;cursor:pointer;}
+    button.ghost{background:transparent;color:var(--accent);border:1px solid #dbe6ff;}
+    table{width:100%;border-collapse:collapse;margin-top:12px;}
+    th,td{padding:8px;border-bottom:1px solid #eef2f7;text-align:left;font-size:14px;}
+    th{background:#fbfdff;font-weight:600;color:#111827;}
+    .muted{color:var(--muted);font-size:13px;}
+    .small{font-size:13px;padding:6px 8px;border-radius:6px;}
+    .danger{background:#ffecec;color:#b00000;border:1px solid #f5c6c6;}
+    .flex-right{margin-left:auto;display:flex;gap:8px;align-items:center;}
+    .summary{display:flex;gap:12px;flex-wrap:wrap;}
+    .pill{background:#f3f6ff;padding:8px;border-radius:8px;font-weight:600;}
+    .editable{background:#fbfdff;padding:6px;border-radius:6px;border:1px dashed #e6e9ef;}
+    .actions button{margin-right:6px;}
+    @media (max-width:800px){.row{flex-direction:column;align-items:stretch}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Partner-Umsatzverwaltung</h1>
+    <div class="card">
+      <div class="row">
+        <div>
+          <label class="muted">Monat anzeigen</label><br/>
+          <input id="monthPicker" type="month" />
+        </div>
+        <div>
+          <label class="muted">Partner</label><br/>
+          <select id="partnerFilter"><option value="__all">Alle Partner</option></select>
+        </div>
+        <div class="flex-right">
+          <button id="exportCsv">CSV export (aktuell)</button>
+          <button id="exportAll" class="ghost">JSON export/import</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <strong>Partner verwalten</strong>
+      <div style="margin-top:8px" class="row">
+        <input id="newPartnerName" placeholder="Name des Partners (z. B. Max Mustermann)" />
+        <button id="addPartner">Partner hinzufügen</button>
+      </div>
+      <table id="partnersTable" style="margin-top:12px">
+        <thead><tr><th>Name</th><th>Umsatz (monatl.)</th><th>Dein Anteil (20%)</th><th class="small">Aktionen</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <strong>Projekt / Verkauf hinzufügen</strong>
+      <div style="margin-top:8px" class="row">
+        <select id="projectPartner"><option value="">-- Partner wählen --</option></select>
+        <input id="projectDate" type="date" />
+        <input id="projectDesc" placeholder="Projektbeschreibung" />
+        <input id="projectAmount" type="number" placeholder="Betrag" min="0" step="0.01" />
+        <button id="addProject">Projekt hinzufügen</button>
+      </div>
+
+      <div id="projectsList" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <strong>Übersicht</strong>
+        <div class="muted">Zeige Umsätze je Partner für den ausgewählten Monat</div>
+      </div>
+
+      <div class="summary" style="margin-top:12px">
+        <div class="pill" id="totalSales">Gesamtumsatz: €0.00</div>
+        <div class="pill" id="totalShare">Dein Anteil (20%): €0.00</div>
+        <div class="pill" id="numProjects">Anzahl Projekte: 0</div>
+      </div>
+
+      <table id="overviewTable">
+        <thead><tr><th>Partner</th><th>Umsatz</th><th>Dein Anteil (20%)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card muted" style="font-size:13px;">
+      Speicherung: <strong>Im Browser (localStorage)</strong>. Du kannst deine Daten exportieren (JSON) und lokal sichern. Bei Verlust des Browser-Profils gehen die Daten sonst verloren.
+    </div>
+  </div>
+
+<script>
+// --- Datenstruktur ---
+// localStorage keys
+const LS_KEY = 'partner_umsatz_data_v1';
+
+let state = { partners: [], projects: [] }; // partners: [{id,name}], projects: [{id,partnerId,date,desc,amount}]
+
+// --- Utilities ---
+const uid = ()=>Math.random().toString(36).slice(2,10);
+const fmt = (v)=>'€'+Number(v||0).toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+function loadState(){
+  const raw = localStorage.getItem(LS_KEY);
+  if(raw){
+    try{ state = JSON.parse(raw); }catch(e){ console.error('Fehler beim Laden',e); state={partners:[],projects:[]}; }
+  } else {
+    // seed demo if empty
+    state = { partners: [], projects: [] };
+  }
+}
+
+function saveState(){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+
+function addPartner(name){ name = (name||'').trim(); if(!name) return alert('Name erforderlich'); const p={id:uid(),name}; state.partners.push(p); saveState(); renderAll(); }
+
+function deletePartner(id){
+  if(!confirm('Partner wirklich löschen? Alle zugehörigen Projekte werden ebenfalls gelöscht.')) return;
+  state.partners = state.partners.filter(p=>p.id!==id);
+  state.projects = state.projects.filter(pr=>pr.partnerId!==id);
+  saveState(); renderAll();
+}
+
+function addProject(partnerId,date,desc,amount){
+  if(!partnerId) return alert('Partner wählen'); if(!date) return alert('Datum wählen');
+  amount = Number(amount); if(isNaN(amount)||amount<0) return alert('Ungültiger Betrag');
+  const pr = { id: uid(), partnerId, date, desc: (desc||''), amount };
+  state.projects.push(pr); saveState(); renderAll();
+}
+
+function deleteProject(id){ if(!confirm('Projekt löschen?')) return; state.projects = state.projects.filter(p=>p.id!==id); saveState(); renderAll(); }
+
+function editProject(id){ const p = state.projects.find(x=>x.id===id); if(!p) return;
+  const newDate = prompt('Datum (YYYY-MM-DD)', p.date); if(!newDate) return;
+  const newDesc = prompt('Beschreibung', p.desc);
+  const newAmount = prompt('Betrag', p.amount);
+  const num = Number(newAmount);
+  if(isNaN(num)||num<0){ alert('Ungültiger Betrag'); return; }
+  p.date=newDate; p.desc=newDesc; p.amount=num; saveState(); renderAll();
+}
+
+// --- Rendering ---
+function renderAll(){
+  renderPartnerSelects();
+  renderPartnersTable();
+  renderProjectsList();
+  renderOverview();
+}
+
+function renderPartnerSelects(){
+  const sel = document.getElementById('projectPartner');
+  const filter = document.getElementById('partnerFilter');
+  sel.innerHTML = '<option value="">-- Partner wählen --</option>';
+  filter.innerHTML = '<option value="__all">Alle Partner</option>';
+  state.partners.forEach(p=>{
+    const o = document.createElement('option'); o.value = p.id; o.textContent = p.name; sel.appendChild(o);
+    const o2 = document.createElement('option'); o2.value = p.id; o2.textContent = p.name; filter.appendChild(o2);
+  });
+}
+
+function getSelectedMonth(){
+  const v = document.getElementById('monthPicker').value;
+  if(!v) return null;
+  const [y,m] = v.split('-').map(Number);
+  return {year:y,month:m};
+}
+
+function inMonth(dateStr,monthObj){
+  if(!monthObj) return true;
+  const d = new Date(dateStr+'T00:00:00');
+  return d.getFullYear()===monthObj.year && (d.getMonth()+1)===monthObj.month;
+}
+
+function renderPartnersTable(){
+  const tbody = document.querySelector('#partnersTable tbody');
+  tbody.innerHTML='';
+  const month = getSelectedMonth();
+  state.partners.forEach(p=>{
+    const rev = state.projects.filter(pr=>pr.partnerId===p.id && inMonth(pr.date,month)).reduce((s,r)=>s+Number(r.amount),0);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(p.name)}</td>
+      <td>${fmt(rev)}</td>
+      <td>${fmt(rev*0.2)}</td>
+      <td class="actions"><button class="small" onclick="promptEditPartner('${p.id}')">Bearb.</button>
+      <button class="small danger" onclick="deletePartner('${p.id}')">Löschen</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function promptEditPartner(id){ const p = state.partners.find(x=>x.id===id); if(!p) return;
+  const newName = prompt('Neuer Name', p.name); if(!newName) return; p.name=newName.trim(); saveState(); renderAll();
+}
+
+function renderProjectsList(){
+  const container = document.getElementById('projectsList');
+  const filter = document.getElementById('partnerFilter').value;
+  const month = getSelectedMonth();
+  let rows = state.projects.slice().sort((a,b)=> b.date.localeCompare(a.date));
+  if(filter && filter!=='__all') rows = rows.filter(r=>r.partnerId===filter);
+  const table = document.createElement('table');
+  table.innerHTML = '<thead><tr><th>Datum</th><th>Partner</th><th>Beschreibung</th><th>Betrag</th><th>Aktionen</th></tr></thead>';
+  const tb = document.createElement('tbody');
+  rows.forEach(pj=>{
+    const part = state.partners.find(x=>x.id===pj.partnerId);
+    if(!part) return;
+    // if month filter active, only show those in month
+    if(!inMonth(pj.date,month) && month) return;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${pj.date}</td><td>${escapeHtml(part.name)}</td><td>${escapeHtml(pj.desc)}</td><td>${fmt(pj.amount)}</td>
+      <td><button class="small" onclick="editProject('${pj.id}')">Bearb.</button>
+      <button class="small danger" onclick="deleteProject('${pj.id}')">Löschen</button></td>`;
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  container.innerHTML=''; container.appendChild(table);
+}
+
+function renderOverview(){
+  const month = getSelectedMonth();
+  const filter = document.getElementById('partnerFilter').value;
+  const overviewBody = document.querySelector('#overviewTable tbody');
+  overviewBody.innerHTML='';
+  const partnersToShow = filter && filter!=='__all' ? state.partners.filter(p=>p.id===filter) : state.partners;
+  let total=0, totalShare=0, count=0;
+  partnersToShow.forEach(p=>{
+    const rev = state.projects.filter(pr=>pr.partnerId===p.id && inMonth(pr.date,month)).reduce((s,r)=>s+Number(r.amount),0);
+    const share = rev*0.2;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(p.name)}</td><td>${fmt(rev)}</td><td>${fmt(share)}</td>`;
+    overviewBody.appendChild(tr);
+    total += rev; totalShare += share;
+  });
+  count = state.projects.filter(pr=> inMonth(pr.date,month) && (filter==='__all' || !filter) ? true : (filter? pr.partnerId===filter : true)).length;
+  document.getElementById('totalSales').textContent = 'Gesamtumsatz: ' + fmt(total);
+  document.getElementById('totalShare').textContent = 'Dein Anteil (20%): ' + fmt(totalShare);
+  document.getElementById('numProjects').textContent = 'Anzahl Projekte: ' + count;
+}
+
+// --- Helpers ---
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]); }
+
+// --- Events ---
+document.getElementById('addPartner').addEventListener('click', ()=>{
+  addPartner(document.getElementById('newPartnerName').value);
+  document.getElementById('newPartnerName').value='';
+});
+
+document.getElementById('addProject').addEventListener('click', ()=>{
+  addProject(
+    document.getElementById('projectPartner').value,
+    document.getElementById('projectDate').value,
+    document.getElementById('projectDesc').value,
+    document.getElementById('projectAmount').value
+  );
+  // clear inputs
+  document.getElementById('projectDesc').value='';
+  document.getElementById('projectAmount').value='';
+  document.getElementById('projectDate').value='';
+});
+
+document.getElementById('monthPicker').addEventListener('change', renderAll);
+document.getElementById('partnerFilter').addEventListener('change', renderAll);
+
+document.getElementById('exportCsv').addEventListener('click', ()=>{
+  const month = getSelectedMonth();
+  const rows = ['Datum,Partner,Beschreibung,Betrag'];
+  state.projects.slice().forEach(pj=>{
+    if(!inMonth(pj.date,month) && month) return;
+    const partner = state.partners.find(x=>x.id===pj.partnerId);
+    rows.push(`${pj.date},"${(partner?partner.name:'-')}", "${(pj.desc||'')}",${Number(pj.amount).toFixed(2)}`);
+  });
+  downloadBlob(rows.join('\\n'),'partner_umsatz.csv','text/csv');
+});
+
+document.getElementById('exportAll').addEventListener('click', ()=>{
+  const json = JSON.stringify(state, null, 2);
+  const blob = new Blob([json],{type:'application/json'});
+  downloadBlobObject(blob,'partner_umsatz_backup.json');
+});
+
+function downloadBlob(text,filename,type='text/plain'){
+  const blob = new Blob([text],{type});
+  downloadBlobObject(blob,filename);
+}
+
+function downloadBlobObject(blob,filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
+// import via file drop on export button (simple)
+document.getElementById('exportAll').addEventListener('contextmenu', (e)=>{
+  e.preventDefault(); alert('Rechtsklick + Datei öffnen: Du kannst eine exportierte JSON-Datei importieren, indem du sie öffnest und den Inhalt in der Konsole einliest (einfacher Weg: benutze Entwicklerkonsole und setze localStorage).');
+});
+
+// -- initialization --
+loadState();
+renderAll();
+
+// expose some functions for inline buttons
+window.deletePartner = deletePartner;
+window.deleteProject = deleteProject;
+window.editProject = editProject;
+window.promptEditPartner = promptEditPartner;
+
+</script>
+</body>
+</html>
